@@ -1,0 +1,74 @@
+<#
+    win11-update-toggle.ps1
+    Checks Windows 11 version/build, then asks to block or unblock updates.
+#>
+
+Write-Host "=== Windows 11 Version Check ===" -ForegroundColor Cyan
+$osInfo = Get-ComputerInfo -Property WindowsVersion, WindowsBuildLabEx
+Write-Host ("Version: {0}" -f $osInfo.WindowsVersion) -ForegroundColor Green
+Write-Host ("Build Info: {0}" -f $osInfo.WindowsBuildLabEx) -ForegroundColor Green
+
+# Windows 11 builds are 22000+
+$buildNumber = [int]($osInfo.WindowsBuildLabEx.Split('.')[0])
+if ($buildNumber -lt 22000) {
+    Write-Host "This script is intended for Windows 11 (build >=22000). Exiting." -ForegroundColor Red
+    exit 1
+}
+
+
+# Prompt user
+$choice = Read-Host "`nDo you want to BLOCK or UNBLOCK Windows Updates? (Y/N)"
+
+switch ($choice.ToUpper()) {
+
+    'Y' {
+        Write-Host "`n--- BLOCKING Windows Updates ---" -ForegroundColor Cyan
+
+        # Stop & disable Windows Update service
+        Try {
+            Stop-Service -Name wuauserv -Force -ErrorAction Stop
+            Set-Service -Name wuauserv -StartupType Disabled
+            Write-Host "Windows Update service stopped and disabled." -ForegroundColor Green
+        } Catch {
+            Write-Host "Failed to modify Windows Update service: $_" -ForegroundColor Red
+        }
+
+        # Defer feature updates via registry
+        $regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        New-Item -Path $regPath -Force | Out-Null
+        Set-ItemProperty -Path $regPath -Name "DeferFeatureUpdatesToPolicy" -Type DWord -Value 1
+        Set-ItemProperty -Path $regPath -Name "DeferFeatureUpdatesPeriodInDays" -Type DWord -Value 365
+        Write-Host "Feature updates deferred for 365 days." -ForegroundColor Green
+
+        Write-Host "`nUpdates are now blocked. Restart your computer to apply changes." -ForegroundColor Yellow
+    }
+
+    'N' {
+        Write-Host "`n--- UNBLOCKING Windows Updates ---" -ForegroundColor Cyan
+
+        # Re-enable Windows Update service
+        Try {
+            Set-Service -Name wuauserv -StartupType Manual
+            Start-Service -Name wuauserv
+            Write-Host "Windows Update service re-enabled and started." -ForegroundColor Green
+        } Catch {
+            Write-Host "Failed to re-enable Windows Update service: $_" -ForegroundColor Red
+        }
+
+        # Remove feature update deferral keys if they exist
+        $regPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+        if (Test-Path $regPath) {
+            Remove-ItemProperty -Path $regPath -Name "DeferFeatureUpdatesToPolicy" -ErrorAction SilentlyContinue
+            Remove-ItemProperty -Path $regPath -Name "DeferFeatureUpdatesPeriodInDays" -ErrorAction SilentlyContinue
+            Write-Host "Removed feature update deferral settings." -ForegroundColor Green
+        }
+
+        Write-Host "`nUpdates are now unblocked. Windows will resume normal updating." -ForegroundColor Yellow
+    }
+
+    Default {
+        Write-Host "Invalid choice. Please run the script again and select B or U." -ForegroundColor Red
+    }
+}
+
+Write-Host "`n=== Script Complete ===" -ForegroundColor Cyan
